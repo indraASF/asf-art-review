@@ -4,6 +4,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const fetch = require('node-fetch');
 const cors = require('cors');
 const sharp = require('sharp');
+const Redis = require('ioredis');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -13,8 +14,10 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Deduplication — track processed response IDs
-const processedResponses = new Set();
+// Redis client for persistent deduplication
+const redis = new Redis(process.env.REDIS_URL);
+redis.on('connect', () => console.log('Redis connected'));
+redis.on('error', (err) => console.log('Redis error:', err));
 
 const SYSTEM_PROMPT = `You are a warm, perceptive art business advisor at Art Storefronts. Generate one personal art review email for the lead whose details you receive.
 
@@ -92,19 +95,18 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
       return res.json({ success: true, message: 'Ignored' });
     }
 
-    // Deduplicate by responseId
+    // Persistent deduplication via Redis
     const responseId = body.data?.responseId || body.responseId;
     if (responseId) {
-      if (processedResponses.has(responseId)) {
+      const alreadyProcessed = await redis.get(`processed:${responseId}`);
+      if (alreadyProcessed) {
         console.log('Duplicate response ignored:', responseId);
         return res.json({ success: true, message: 'Duplicate ignored' });
       }
-      processedResponses.add(responseId);
-      // Clean up old IDs after 1 hour to prevent memory leak
-      setTimeout(() => processedResponses.delete(responseId), 60 * 60 * 1000);
+      // Store with 24 hour expiry
+      await redis.set(`processed:${responseId}`, '1', 'EX', 86400);
+      console.log('Processing new response:', responseId);
     }
-
-    console.log('Processing response:', responseId);
 
     const fieldMap = {};
     if (body.data && body.data.fields) {
