@@ -61,6 +61,7 @@ The Art Storefronts Team`;
 app.post('/review', upload.single('artwork'), async (req, res) => {
   try {
 const body = req.body;
+console.log('Tally payload:', JSON.stringify(body));
     
     // Handle Tally's field format - try multiple possible field names
     const email = body.email || body['Email'] || body['Your Email Address (this is where we\'ll send your review)'] || body['Email Address'] || 'not provided';
