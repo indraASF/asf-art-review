@@ -7,8 +7,8 @@ const cors = require('cors');
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -60,34 +60,67 @@ The Art Storefronts Team`;
 
 app.post('/review', upload.single('artwork'), async (req, res) => {
   try {
-const body = req.body;
-console.log('Tally payload:', JSON.stringify(body));
-    
-    // Handle Tally's field format - try multiple possible field names
-    const email = body.email || body['Email'] || body['Your Email Address (this is where we\'ll send your review)'] || body['Email Address'] || 'not provided';
-    const medium = body.medium || body['Medium'] || body['Your Medium(s)'] || body['What medium do you work in?'] || 'not specified';
-    const selling_approach = body.selling_approach || body['Selling'] || body['How are you currently approaching selling your art? (select all that apply)'] || body['How are you currently selling'] || 'not specified';
-    const sales_2025 = body.sales_2025 || body['Sales'] || body['How much art did you sell in 2025?'] || body['How much art did you sell'] || 'not specified';
-    const challenge = body.challenge || body['Challenge'] || body['What is your NUMBER ONE art business challenge right now?'] || body['Biggest challenge'] || 'not provided';
-    const art_description = body.art_description || body['Art Description'] || body['Describe your work'] || body['Describe your work in a few sentences'] || 'not provided';
-    const instagram = body.instagram || body['Instagram'] || body['Your Instagram Handle'] || body['Instagram Handle'] || 'not provided';
-    const website = body.website || body['Website'] || body['Link to where we can view your art'] || body['Website URL'] || 'not provided';
+    const body = req.body;
+    console.log('Tally payload:', JSON.stringify(body));
 
-    const userText = `
-Email: ${email || 'not provided'}
-Medium: ${medium || 'not specified'}
-How they are selling: ${selling_approach || 'not specified'}
-2025 sales: ${sales_2025 || 'not specified'}
-Biggest challenge: ${challenge || 'not provided'}
-Art description: ${art_description || 'not provided'}
-Instagram: ${instagram || 'not provided'}
-Website: ${website || 'not provided'}
+    // Parse Tally's nested field structure
+    const fields = {};
+    if (body.data && body.data.fields) {
+      body.data.fields.forEach(field => {
+        fields[field.key] = field.value;
+        fields[field.label] = field.value;
+      });
+    }
 
-Generate their personal art review now.`;
+    const email = fields['question_LGkDWv'] || fields['What\'s your Email address?'] || body.email || 'not provided';
+    const name = fields['question_pAveBJ'] || fields['What\'s your preferred name?'] || body.name || '';
+    const medium = Array.isArray(fields['question_1K6W7p'])
+      ? fields['question_1K6W7p'].map(v => typeof v === 'object' ? v.text || v : v).join(', ')
+      : fields['What medium do you work in?'] || body.medium || 'not specified';
+    const selling_approach = Array.isArray(fields['question_M0m1zM'])
+      ? fields['question_M0m1zM'].map(v => typeof v === 'object' ? v.text || v : v).join(', ')
+      : fields['How are you currently approaching selling your art?'] || body.selling_approach || 'not specified';
+    const sales_2025 = typeof fields['question_JRM1Ao'] === 'object'
+      ? fields['question_JRM1Ao'].text || JSON.stringify(fields['question_JRM1Ao'])
+      : fields['question_JRM1Ao'] || fields['How much art did you sell in 2025?'] || body.sales_2025 || 'not specified';
+    const challenge = fields['question_gAvbMO'] || fields['What\'s your number one art business challenge right now?'] || body.challenge || 'not provided';
+    const art_description = fields['question_yyzX9g'] || fields['Describe your work in a few sentences'] || body.art_description || 'not provided';
+    const instagram = fields['question_XGz5Wg'] || fields['Your Instagram handle'] || body.instagram || 'not provided';
+    const website = fields['question_8kMNQ5'] || fields['Link to where we can view your art'] || body.website || 'not provided';
 
+    const displayName = name || email.split('@')[0];
+
+    // Handle image from Tally file upload
+    let imageData = null;
+    let imageMimeType = 'image/jpeg';
+    const fileField = fields['question_0MaV6y'] || fields['Upload an image of your work'];
+    if (fileField && Array.isArray(fileField) && fileField.length > 0) {
+      const fileInfo = fileField[0];
+      if (fileInfo.url) {
+        try {
+          const imageResponse = await fetch(fileInfo.url);
+          const imageBuffer = await imageResponse.buffer();
+          imageData = imageBuffer.toString('base64');
+          imageMimeType = fileInfo.mimeType || 'image/jpeg';
+        } catch (e) {
+          console.log('Could not fetch image:', e.message);
+        }
+      }
+    }
+
+    // Build message content
     const messageContent = [];
 
-    if (req.file) {
+    if (imageData) {
+      messageContent.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: imageMimeType,
+          data: imageData
+        }
+      });
+    } else if (req.file) {
       const base64Image = req.file.buffer.toString('base64');
       const mimeType = req.file.mimetype || 'image/jpeg';
       messageContent.push({
@@ -99,6 +132,19 @@ Generate their personal art review now.`;
         }
       });
     }
+
+    const userText = `
+Email: ${email}
+Name: ${displayName}
+Medium: ${medium}
+How they are selling: ${selling_approach}
+2025 sales: ${sales_2025}
+Biggest challenge: ${challenge}
+Art description: ${art_description}
+Instagram: ${instagram}
+Website: ${website}
+
+Generate their personal art review now.`;
 
     messageContent.push({ type: 'text', text: userText });
 
@@ -117,7 +163,7 @@ Generate their personal art review now.`;
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: `*New Art Review Ready*\n*Lead:* ${email}\n*Medium:* ${medium}\n\n${reviewText}\n\n---\n_Send this to the lead via Intercom when timing feels right._`
+          text: `*New Art Review Ready*\n*Lead:* ${email}\n*Name:* ${displayName}\n*Medium:* ${medium}\n\n${reviewText}\n\n---\n_Send this to the lead via Intercom when timing feels right._`
         })
       });
     }
