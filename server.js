@@ -60,16 +60,17 @@ The Art Storefronts Team`;
 
 app.post('/review', upload.single('artwork'), async (req, res) => {
   try {
-    const {
-      email,
-      medium,
-      selling_approach,
-      sales_2025,
-      challenge,
-      art_description,
-      instagram,
-      website
-    } = req.body;
+const body = req.body;
+    
+    // Handle Tally's field format - try multiple possible field names
+    const email = body.email || body['Email'] || body['Your Email Address (this is where we\'ll send your review)'] || body['Email Address'] || 'not provided';
+    const medium = body.medium || body['Medium'] || body['Your Medium(s)'] || body['What medium do you work in?'] || 'not specified';
+    const selling_approach = body.selling_approach || body['Selling'] || body['How are you currently approaching selling your art? (select all that apply)'] || body['How are you currently selling'] || 'not specified';
+    const sales_2025 = body.sales_2025 || body['Sales'] || body['How much art did you sell in 2025?'] || body['How much art did you sell'] || 'not specified';
+    const challenge = body.challenge || body['Challenge'] || body['What is your NUMBER ONE art business challenge right now?'] || body['Biggest challenge'] || 'not provided';
+    const art_description = body.art_description || body['Art Description'] || body['Describe your work'] || body['Describe your work in a few sentences'] || 'not provided';
+    const instagram = body.instagram || body['Instagram'] || body['Your Instagram Handle'] || body['Instagram Handle'] || 'not provided';
+    const website = body.website || body['Website'] || body['Link to where we can view your art'] || body['Website URL'] || 'not provided';
 
     const userText = `
 Email: ${email || 'not provided'}
