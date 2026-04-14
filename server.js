@@ -58,42 +58,52 @@ OUR TAKEAWAY
 Warmly,
 The Art Storefronts Team`;
 
+function resolveField(field) {
+  if (!field) return null;
+  if (typeof field === 'string') return field;
+  if (Array.isArray(field)) {
+    return field.map(item => {
+      if (typeof item === 'string') return item;
+      if (typeof item === 'object' && item !== null) return item.text || item.value || JSON.stringify(item);
+      return String(item);
+    }).join(', ');
+  }
+  if (typeof field === 'object') {
+    return field.text || field.value || JSON.stringify(field);
+  }
+  return String(field);
+}
+
 app.post('/review', upload.single('artwork'), async (req, res) => {
   try {
     const body = req.body;
     console.log('Tally payload:', JSON.stringify(body));
 
-    // Parse Tally's nested field structure
     const fields = {};
     if (body.data && body.data.fields) {
       body.data.fields.forEach(field => {
         fields[field.key] = field.value;
-        fields[field.label] = field.value;
       });
     }
 
-    const email = fields['question_LGkDWv'] || fields['What\'s your Email address?'] || body.email || 'not provided';
-    const name = fields['question_pAveBJ'] || fields['What\'s your preferred name?'] || body.name || '';
-    const medium = Array.isArray(fields['question_1K6W7p'])
-      ? fields['question_1K6W7p'].map(v => typeof v === 'object' ? v.text || v : v).join(', ')
-      : fields['What medium do you work in?'] || body.medium || 'not specified';
-    const selling_approach = Array.isArray(fields['question_M0m1zM'])
-      ? fields['question_M0m1zM'].map(v => typeof v === 'object' ? v.text || v : v).join(', ')
-      : fields['How are you currently approaching selling your art?'] || body.selling_approach || 'not specified';
-    const sales_2025 = typeof fields['question_JRM1Ao'] === 'object'
-      ? fields['question_JRM1Ao'].text || JSON.stringify(fields['question_JRM1Ao'])
-      : fields['question_JRM1Ao'] || fields['How much art did you sell in 2025?'] || body.sales_2025 || 'not specified';
-    const challenge = fields['question_gAvbMO'] || fields['What\'s your number one art business challenge right now?'] || body.challenge || 'not provided';
-    const art_description = fields['question_yyzX9g'] || fields['Describe your work in a few sentences'] || body.art_description || 'not provided';
-    const instagram = fields['question_XGz5Wg'] || fields['Your Instagram handle'] || body.instagram || 'not provided';
-    const website = fields['question_8kMNQ5'] || fields['Link to where we can view your art'] || body.website || 'not provided';
+    const email = resolveField(fields['question_LGkDWv']) || 'not provided';
+    const name = resolveField(fields['question_pAveBJ']) || '';
+    const medium = resolveField(fields['question_1K6W7p']) || 'not specified';
+    const selling_approach = resolveField(fields['question_M0m1zM']) || 'not specified';
+    const sales_2025 = resolveField(fields['question_JRM1Ao']) || 'not specified';
+    const challenge = resolveField(fields['question_gAvbMO']) || 'not provided';
+    const art_description = resolveField(fields['question_yyzX9g']) || 'not provided';
+    const instagram = resolveField(fields['question_XGz5Wg']) || 'not provided';
+    const website = resolveField(fields['question_8kMNQ5']) || 'not provided';
 
     const displayName = name || email.split('@')[0];
+
+    console.log('Parsed fields:', { email, name, medium, selling_approach, sales_2025, challenge, art_description, instagram, website });
 
     // Handle image from Tally file upload
     let imageData = null;
     let imageMimeType = 'image/jpeg';
-    const fileField = fields['question_0MaV6y'] || fields['Upload an image of your work'];
+    const fileField = fields['question_0MaV6y'];
     if (fileField && Array.isArray(fileField) && fileField.length > 0) {
       const fileInfo = fileField[0];
       if (fileInfo.url) {
@@ -102,6 +112,7 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
           const imageBuffer = await imageResponse.buffer();
           imageData = imageBuffer.toString('base64');
           imageMimeType = fileInfo.mimeType || 'image/jpeg';
+          console.log('Image fetched successfully');
         } catch (e) {
           console.log('Could not fetch image:', e.message);
         }
@@ -146,10 +157,11 @@ Website: ${website}
 
 Generate their personal art review now.`;
 
+    console.log('User text:', userText);
     messageContent.push({ type: 'text', text: userText });
 
     const response = await client.messages.create({
-      model: 'claude-opus-4-5',
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: messageContent }]
