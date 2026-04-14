@@ -58,20 +58,35 @@ OUR TAKEAWAY
 Warmly,
 The Art Storefronts Team`;
 
-function resolveField(field) {
-  if (!field) return null;
-  if (typeof field === 'string') return field;
-  if (Array.isArray(field)) {
-    return field.map(item => {
-      if (typeof item === 'string') return item;
-      if (typeof item === 'object' && item !== null) return item.text || item.value || JSON.stringify(item);
+function resolveField(value, options) {
+  const optionMap = {};
+  if (options && Array.isArray(options)) {
+    options.forEach(opt => {
+      if (opt.id && opt.text) optionMap[opt.id] = opt.text;
+    });
+  }
+
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    return optionMap[value] || value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      if (typeof item === 'string') return optionMap[item] || item;
+      if (typeof item === 'object' && item !== null) {
+        return item.text || optionMap[item.id] || item.value || JSON.stringify(item);
+      }
       return String(item);
     }).join(', ');
   }
-  if (typeof field === 'object') {
-    return field.text || field.value || JSON.stringify(field);
+
+  if (typeof value === 'object') {
+    return value.text || optionMap[value.id] || value.value || JSON.stringify(value);
   }
-  return String(field);
+
+  return String(value);
 }
 
 app.post('/review', upload.single('artwork'), async (req, res) => {
@@ -79,31 +94,30 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
     const body = req.body;
     console.log('Tally payload:', JSON.stringify(body));
 
-    const fields = {};
+    const fieldMap = {};
     if (body.data && body.data.fields) {
       body.data.fields.forEach(field => {
-        fields[field.key] = field.value;
+        fieldMap[field.key] = { value: field.value, options: field.options };
       });
     }
 
-    const email = resolveField(fields['question_LGkDWv']) || 'not provided';
-    const name = resolveField(fields['question_pAveBJ']) || '';
-    const medium = resolveField(fields['question_1K6W7p']) || 'not specified';
-    const selling_approach = resolveField(fields['question_M0m1zM']) || 'not specified';
-    const sales_2025 = resolveField(fields['question_JRM1Ao']) || 'not specified';
-    const challenge = resolveField(fields['question_gAvbMO']) || 'not provided';
-    const art_description = resolveField(fields['question_yyzX9g']) || 'not provided';
-    const instagram = resolveField(fields['question_XGz5Wg']) || 'not provided';
-    const website = resolveField(fields['question_8kMNQ5']) || 'not provided';
+    const email = resolveField(fieldMap['question_LGkDWv']?.value) || 'not provided';
+    const name = resolveField(fieldMap['question_pAveBJ']?.value) || '';
+    const medium = resolveField(fieldMap['question_1K6W7p']?.value, fieldMap['question_1K6W7p']?.options) || 'not specified';
+    const selling_approach = resolveField(fieldMap['question_M0m1zM']?.value, fieldMap['question_M0m1zM']?.options) || 'not specified';
+    const sales_2025 = resolveField(fieldMap['question_JRM1Ao']?.value, fieldMap['question_JRM1Ao']?.options) || 'not specified';
+    const challenge = resolveField(fieldMap['question_gAvbMO']?.value) || 'not provided';
+    const art_description = resolveField(fieldMap['question_yyzX9g']?.value) || 'not provided';
+    const instagram = resolveField(fieldMap['question_XGz5Wg']?.value) || 'not provided';
+    const website = resolveField(fieldMap['question_8kMNQ5']?.value) || 'not provided';
 
     const displayName = name || email.split('@')[0];
 
-    console.log('Parsed fields:', { email, name, medium, selling_approach, sales_2025, challenge, art_description, instagram, website });
+    console.log('Parsed fields:', { email, name: displayName, medium, selling_approach, sales_2025, challenge, art_description, instagram, website });
 
-    // Handle image from Tally file upload
     let imageData = null;
     let imageMimeType = 'image/jpeg';
-    const fileField = fields['question_0MaV6y'];
+    const fileField = fieldMap['question_0MaV6y']?.value;
     if (fileField && Array.isArray(fileField) && fileField.length > 0) {
       const fileInfo = fileField[0];
       if (fileInfo.url) {
@@ -119,7 +133,6 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
       }
     }
 
-    // Build message content
     const messageContent = [];
 
     if (imageData) {
@@ -157,7 +170,7 @@ Website: ${website}
 
 Generate their personal art review now.`;
 
-    console.log('User text:', userText);
+    console.log('User text sent to Claude:', userText);
     messageContent.push({ type: 'text', text: userText });
 
     const response = await client.messages.create({
@@ -169,7 +182,6 @@ Generate their personal art review now.`;
 
     const reviewText = response.content[0].text;
 
-    // Send to Slack
     if (process.env.SLACK_WEBHOOK_URL) {
       await fetch(process.env.SLACK_WEBHOOK_URL, {
         method: 'POST',
