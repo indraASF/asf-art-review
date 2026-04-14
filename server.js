@@ -93,6 +93,11 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
   try {
     const body = req.body;
     console.log('Tally payload:', JSON.stringify(body));
+    // Ignore non-form-response events
+if (body.eventType !== 'FORM_RESPONSE') {
+  console.log('Ignoring non-form-response event:', body.eventType);
+  return res.json({ success: true, message: 'Ignored' });
+}
 
     const fieldMap = {};
     if (body.data && body.data.fields) {
