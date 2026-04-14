@@ -14,7 +14,6 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Redis client for persistent deduplication
 const redis = new Redis(process.env.REDIS_URL);
 redis.on('connect', () => console.log('Redis connected'));
 redis.on('error', (err) => console.log('Redis error:', err));
@@ -95,18 +94,28 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
       return res.json({ success: true, message: 'Ignored' });
     }
 
-    // Persistent deduplication via Redis
+    // Layer 1 — deduplicate by responseId
     const responseId = body.data?.responseId || body.responseId;
     if (responseId) {
       const alreadyProcessed = await redis.get(`processed:${responseId}`);
       if (alreadyProcessed) {
-        console.log('Duplicate response ignored:', responseId);
+        console.log('Duplicate responseId ignored:', responseId);
         return res.json({ success: true, message: 'Duplicate ignored' });
       }
-      // Store with 24 hour expiry
       await redis.set(`processed:${responseId}`, '1', 'EX', 86400);
       console.log('Processing new response:', responseId);
     }
+
+    // Layer 2 — deduplicate by email within 30 minute window
+    const rawEmailField = body.data?.fields?.find(f => f.key === 'question_LGkDWv');
+    const rawEmail = rawEmailField?.value || 'unknown';
+    const emailKey = `email:${rawEmail}`;
+    const emailAlreadyProcessed = await redis.get(emailKey);
+    if (emailAlreadyProcessed) {
+      console.log('Duplicate email within time window ignored:', rawEmail);
+      return res.json({ success: true, message: 'Duplicate email ignored' });
+    }
+    await redis.set(emailKey, '1', 'EX', 1800);
 
     const fieldMap = {};
     if (body.data && body.data.fields) {
