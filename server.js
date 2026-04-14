@@ -13,6 +13,9 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Deduplication — track processed response IDs
+const processedResponses = new Set();
+
 const SYSTEM_PROMPT = `You are a warm, perceptive art business advisor at Art Storefronts. Generate one personal art review email for the lead whose details you receive.
 
 TONE: Casual, direct, warm. Like a knowledgeable friend who actually spent time looking at their work. Contractions throughout. Never corporate, never formal, never newsletter-y.
@@ -66,40 +69,42 @@ function resolveField(value, options) {
       if (opt.id && opt.text) optionMap[opt.id] = opt.text;
     });
   }
-
   if (!value) return null;
-
-  if (typeof value === 'string') {
-    return optionMap[value] || value;
-  }
-
+  if (typeof value === 'string') return optionMap[value] || value;
   if (Array.isArray(value)) {
     return value.map(item => {
       if (typeof item === 'string') return optionMap[item] || item;
-      if (typeof item === 'object' && item !== null) {
-        return item.text || optionMap[item.id] || item.value || JSON.stringify(item);
-      }
+      if (typeof item === 'object' && item !== null) return item.text || optionMap[item.id] || item.value || JSON.stringify(item);
       return String(item);
     }).join(', ');
   }
-
-  if (typeof value === 'object') {
-    return value.text || optionMap[value.id] || value.value || JSON.stringify(value);
-  }
-
+  if (typeof value === 'object') return value.text || optionMap[value.id] || value.value || JSON.stringify(value);
   return String(value);
 }
 
 app.post('/review', upload.single('artwork'), async (req, res) => {
   try {
     const body = req.body;
-    console.log('Tally payload:', JSON.stringify(body));
 
-    // Ignore non-form-response events to prevent duplicate messages
+    // Ignore non-form-response events
     if (body.eventType !== 'FORM_RESPONSE') {
       console.log('Ignoring non-form-response event:', body.eventType);
       return res.json({ success: true, message: 'Ignored' });
     }
+
+    // Deduplicate by responseId
+    const responseId = body.data?.responseId || body.responseId;
+    if (responseId) {
+      if (processedResponses.has(responseId)) {
+        console.log('Duplicate response ignored:', responseId);
+        return res.json({ success: true, message: 'Duplicate ignored' });
+      }
+      processedResponses.add(responseId);
+      // Clean up old IDs after 1 hour to prevent memory leak
+      setTimeout(() => processedResponses.delete(responseId), 60 * 60 * 1000);
+    }
+
+    console.log('Processing response:', responseId);
 
     const fieldMap = {};
     if (body.data && body.data.fields) {
@@ -132,8 +137,6 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
         try {
           const imageResponse = await fetch(fileInfo.url);
           const imageBuffer = await imageResponse.buffer();
-
-          // Resize if over 4MB to stay safely under Claude's 5MB limit
           let processedBuffer = imageBuffer;
           if (imageBuffer.length > 4 * 1024 * 1024) {
             console.log('Image too large, resizing...');
@@ -143,7 +146,6 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
               .toBuffer();
             imageMimeType = 'image/jpeg';
           }
-
           imageData = processedBuffer.toString('base64');
           console.log('Image processed successfully, size:', processedBuffer.length);
         } catch (e) {
@@ -154,26 +156,17 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
 
     // Build message content
     const messageContent = [];
-
     if (imageData) {
       messageContent.push({
         type: 'image',
-        source: {
-          type: 'base64',
-          media_type: imageMimeType,
-          data: imageData
-        }
+        source: { type: 'base64', media_type: imageMimeType, data: imageData }
       });
     } else if (req.file) {
       const base64Image = req.file.buffer.toString('base64');
       const mimeType = req.file.mimetype || 'image/jpeg';
       messageContent.push({
         type: 'image',
-        source: {
-          type: 'base64',
-          media_type: mimeType,
-          data: base64Image
-        }
+        source: { type: 'base64', media_type: mimeType, data: base64Image }
       });
     }
 
