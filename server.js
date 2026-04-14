@@ -3,6 +3,7 @@ const multer = require('multer');
 const Anthropic = require('@anthropic-ai/sdk');
 const fetch = require('node-fetch');
 const cors = require('cors');
+const sharp = require('sharp');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -93,11 +94,12 @@ app.post('/review', upload.single('artwork'), async (req, res) => {
   try {
     const body = req.body;
     console.log('Tally payload:', JSON.stringify(body));
-    // Ignore non-form-response events
-if (body.eventType !== 'FORM_RESPONSE') {
-  console.log('Ignoring non-form-response event:', body.eventType);
-  return res.json({ success: true, message: 'Ignored' });
-}
+
+    // Ignore non-form-response events to prevent duplicate messages
+    if (body.eventType !== 'FORM_RESPONSE') {
+      console.log('Ignoring non-form-response event:', body.eventType);
+      return res.json({ success: true, message: 'Ignored' });
+    }
 
     const fieldMap = {};
     if (body.data && body.data.fields) {
@@ -120,6 +122,7 @@ if (body.eventType !== 'FORM_RESPONSE') {
 
     console.log('Parsed fields:', { email, name: displayName, medium, selling_approach, sales_2025, challenge, art_description, instagram, website });
 
+    // Handle image from Tally file upload
     let imageData = null;
     let imageMimeType = 'image/jpeg';
     const fileField = fieldMap['question_0MaV6y']?.value;
@@ -129,15 +132,27 @@ if (body.eventType !== 'FORM_RESPONSE') {
         try {
           const imageResponse = await fetch(fileInfo.url);
           const imageBuffer = await imageResponse.buffer();
-          imageData = imageBuffer.toString('base64');
-          imageMimeType = fileInfo.mimeType || 'image/jpeg';
-          console.log('Image fetched successfully');
+
+          // Resize if over 4MB to stay safely under Claude's 5MB limit
+          let processedBuffer = imageBuffer;
+          if (imageBuffer.length > 4 * 1024 * 1024) {
+            console.log('Image too large, resizing...');
+            processedBuffer = await sharp(imageBuffer)
+              .resize(1500, 1500, { fit: 'inside', withoutEnlargement: true })
+              .jpeg({ quality: 85 })
+              .toBuffer();
+            imageMimeType = 'image/jpeg';
+          }
+
+          imageData = processedBuffer.toString('base64');
+          console.log('Image processed successfully, size:', processedBuffer.length);
         } catch (e) {
-          console.log('Could not fetch image:', e.message);
+          console.log('Could not fetch/process image:', e.message);
         }
       }
     }
 
+    // Build message content
     const messageContent = [];
 
     if (imageData) {
@@ -187,6 +202,7 @@ Generate their personal art review now.`;
 
     const reviewText = response.content[0].text;
 
+    // Send to Slack
     if (process.env.SLACK_WEBHOOK_URL) {
       await fetch(process.env.SLACK_WEBHOOK_URL, {
         method: 'POST',
